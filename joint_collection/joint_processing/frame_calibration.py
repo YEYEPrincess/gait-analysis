@@ -1,7 +1,7 @@
 import os
 import shutil
 
-from frame_extract import extract_frames_16fps
+from extract_frames import extract_frames_16fps
 
 FRAME_EXTENSION = ".jpg"
 

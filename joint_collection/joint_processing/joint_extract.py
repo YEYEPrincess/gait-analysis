@@ -9,8 +9,8 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-FRAME_EXTRACT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(FRAME_EXTRACT_DIR)
+JOINT_PROCESSING_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(JOINT_PROCESSING_DIR)
 SAM3D_BODY_DIR = os.path.join(PROJECT_ROOT, "sam-3d-body")
 if SAM3D_BODY_DIR not in sys.path:
     sys.path.insert(0, SAM3D_BODY_DIR)
@@ -21,7 +21,7 @@ from tools.build_detector import HumanDetector
 from tools.vis_utils import visualize_joints_together
 
 
-# Each entry should match a folder name inside frame_extract/output_frames/.
+# Each entry should match a folder name inside joint_processing/output_frames/.
 # Example: if your frames are in output_frames/walking/, use "walking".
 VIDEO_NAMES = [
     "sample_video_1",
@@ -30,7 +30,7 @@ VIDEO_NAMES = [
     "sample_video_4",
 ]
 
-GENERAL_OUTPUT_FOLDER = os.path.join(FRAME_EXTRACT_DIR, "outputs")
+GENERAL_OUTPUT_FOLDER = os.path.join(JOINT_PROCESSING_DIR, "outputs")
 GENERAL_OVERLAY_OUTPUT_FOLDER = os.path.join(GENERAL_OUTPUT_FOLDER, "overlays")
 GENERAL_JOINT_OUTPUT_FOLDER = os.path.join(GENERAL_OUTPUT_FOLDER, "joints_npz")
 
@@ -97,7 +97,7 @@ def list_images(image_folder):
 
 
 def build_video_paths(video_name):
-    image_folder = os.path.join(FRAME_EXTRACT_DIR, "output_frames", video_name)
+    image_folder = os.path.join(JOINT_PROCESSING_DIR, "output_frames", video_name)
     overlay_output_folder = os.path.join(GENERAL_OVERLAY_OUTPUT_FOLDER, video_name)
     joint_output_folder = os.path.join(GENERAL_JOINT_OUTPUT_FOLDER, video_name)
     return image_folder, overlay_output_folder, joint_output_folder

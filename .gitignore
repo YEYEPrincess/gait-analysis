@@ -3,24 +3,37 @@ __pycache__/
 *.pyc
 
 # Models
-part2/checkpoints/
+joint_collection/checkpoints/
 
 # Data
-part2/frame_extract/input_videos/
-part2/frame_extract/output_frames/
+joint_collection/joint_processing/input_videos/*
+!joint_collection/joint_processing/input_videos/.gitkeep
+joint_collection/joint_processing/output_frames/
+insole_collection/common/insole_frames_flat.csv
+insole_collection/data_ct/
+insole_collection/data_for_3djoint/
 
 # Outputs
-part2/outputs/
-part2/frame_extract/outputs/
+outputs/
+joint_collection/outputs/
+joint_collection/joint_processing/outputs/
+joint_collection/sam-3d-body/output/
+
+# Local model weights
+joint_collection/checkpoints/**/*.ckpt
+joint_collection/checkpoints/**/*.pt
+insole_collection/models/checkpoint/*.pt
 
 # Cache
 .cache/
-part2/.cache/
+joint_collection/.cache/
+insole_collection/.conda/
+insole_collection/.cache/
 *.log
 
 # IDE
 .vscode/
-part2/.vscode/
+joint_collection/.vscode/
 
 # OS
 .DS_Store

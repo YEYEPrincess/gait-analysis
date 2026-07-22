@@ -371,7 +371,15 @@ The root-level notebooks contain the bulk of the modelling and experimentation w
 
 - `part1-CT.ipynb`: crosstalk suppression model development and training workflow.
 - `part2_preprocessing.ipynb`: preprocessing steps for preparing paired insole and 3D-joint datasets.
-- `part2-cnn_lstm_loso.ipynb`: CNN-LSTM joint prediction experiments, including leave-one-subject-out style evaluation.
+- `part2-cnn_lstm_loso.ipynb`: CNN-LSTM joint prediction baseline, using leave-one-subject-out (LOSO) 3-fold cross-validation. Subjects 1 and 3 are excluded due to battery-induced timestamp drift causing insole–frame desynchronisation.
+
+### Transformer-based joint prediction
+
+These notebooks explore replacing the CNN-LSTM baseline with Transformer-based temporal modelling, evaluated with the same LOSO cross-validation protocol:
+
+- `part2-cnn_transformer_loso2.ipynb`: replaces the LSTM+Attention block with a CNN spatial encoder → sinusoidal positional encoding → Transformer encoder → mean pooling → FC head. Sequence length is increased from 30 to 60 frames (~2 s at 30 fps) to cover a full gait cycle, and the input adds two velocity-difference channels alongside the two raw pressure channels.
+- `part2_transformer_losov3.ipynb` (方案A / Plan A — dual output head): builds on the v2/v3 Transformer architecture but splits the output layer into two heads — a proximal head (hip, knee) and a distal head (heel, toe) — because heel/toe MAE was found to be 10–40x higher than hip/knee MAE. The distal head's loss is weighted 2x (`DISTAL_LOSS_WEIGHT`) relative to the proximal head.
+- `part2_transformer_planC.ipynb` (Plan C — spatially-preserving CNN): addresses a shared limitation of all prior versions, where `AdaptiveAvgPool2d(1)` collapses each frame's pressure map into a single vector and discards spatial layout. Plan C instead pools each frame down to a 6x3 spatial grid (18 tokens per frame) before the Transformer encoder, so spatial structure is preserved through the temporal modelling stage.
 
 These notebooks were originally developed in Google Colab. They are included as research records and working references, but they are not expected to run directly in this local repository without edits.
 

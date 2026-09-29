@@ -29,7 +29,7 @@ def compute_timestamp_ms(frame_index, fps, offset_ms):
     """Return absolute timestamp (ms) of a frame."""
     return int(offset_ms + (frame_index / fps) * 1000)
 
-def extract_frames_16fps(video_path, output_folder, target_fps=16):
+def extract_frames_at_fps(video_path, output_folder, target_fps=15):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     input_dir = os.path.join(script_dir, "input_videos")
     output_root = os.path.join(script_dir, "output_frames")
@@ -49,6 +49,23 @@ def extract_frames_16fps(video_path, output_folder, target_fps=16):
         raise ValueError(f"Invalid FPS ({original_fps}) for video: {full_video_path}")
 
     step = max(1, round(original_fps / target_fps))
+
+    # Frames are kept every `step`, so the real rate is original_fps / step, which
+    # is NOT target_fps unless step divides original_fps exactly. Downstream code
+    # turns the frame index into a timestamp, so any mismatch here becomes a
+    # clock-rate error that drifts for the whole session. Callers must timestamp
+    # with the returned effective_fps, never with target_fps.
+    effective_fps = original_fps / step
+    drift = abs(effective_fps - target_fps) / target_fps
+    if drift > 0.02:
+        raise ValueError(
+            f"Cannot extract at {target_fps} fps from a {original_fps:g} fps video: "
+            f"step={step} gives {effective_fps:g} fps ({drift:.1%} off). Pick a target_fps "
+            f"near a divisor of the source rate (e.g. {original_fps/2:g}, {original_fps/3:g})."
+        )
+    if drift > 1e-6:
+        print(f"Note: extracting at {effective_fps:.4f} fps (asked for {target_fps:g}); "
+              f"timestamp with the returned value, not the target.")
 
     # offset_ms = get_video_offset_ms(full_video_path)
 
@@ -71,9 +88,11 @@ def extract_frames_16fps(video_path, output_folder, target_fps=16):
 
     cap.release()
 
-    print(f"Saved {saved_count} frames to {output_dir}")
+    print(f"Saved {saved_count} frames to {output_dir} at {effective_fps:g} fps")
 
-"""if __name__ == "__main__":
-    video_path = "sample_video_1.mov"
-    output_folder = video_path.split('.')[0]
-    extract_frames_16fps(video_path, output_folder)"""
+    return effective_fps
+
+if __name__ == "__main__":
+    sessions = ["jingkaiwei", "yifeiyang"]
+    for name in sessions:
+        extract_frames_at_fps(f"{name}.mp4", name)

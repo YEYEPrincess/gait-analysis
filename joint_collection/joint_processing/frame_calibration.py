@@ -1,7 +1,7 @@
 import os
 import shutil
 
-from extract_frames import extract_frames_16fps
+from extract_frames import extract_frames_at_fps
 
 FRAME_EXTENSION = ".jpg"
 
@@ -12,7 +12,9 @@ def numeric_frame_sort_key(filename: str) -> int:
     return int(name)
 
 
-def calibrate_extracted_frames(output_dir: str, start_frame_number: int, target_fps: int = 16) -> None:
+def calibrate_extracted_frames(output_dir: str, start_frame_number: int, fps: float = 15.0) -> None:
+    """`fps` must be the rate the frames were actually kept at (extract_frames_at_fps
+    returns it), otherwise every timestamp drifts for the whole session."""
     frame_files = [f for f in os.listdir(output_dir) if f.lower().endswith(FRAME_EXTENSION)]
     frame_files = sorted(frame_files, key=numeric_frame_sort_key)
 
@@ -29,7 +31,7 @@ def calibrate_extracted_frames(output_dir: str, start_frame_number: int, target_
 
     selected_files = [f for f in frame_files if numeric_frame_sort_key(f) >= start_frame_number]
 
-    ms_per_frame = 1000.0 / target_fps
+    ms_per_frame = 1000.0 / fps
 
     temp_dir = os.path.join(output_dir, "__tmp_calibrated__")
     os.makedirs(temp_dir, exist_ok=True)
@@ -56,12 +58,15 @@ def calibrate_extracted_frames(output_dir: str, start_frame_number: int, target_
 
 
 def main():
-    video_path = "sample_video_1.mov"
-    target_fps = 16
+    import sys
+    session = sys.argv[1] if len(sys.argv) > 1 else "wuyu"
+    video_path = f"{session}.mp4"
+    target_fps = 15
 
-    output_folder = os.path.splitext(video_path)[0]
+    output_folder = session
 
-    extract_frames_16fps(video_path, output_folder, target_fps=target_fps)
+    # Timestamp with the rate frames were REALLY kept at, not the requested one.
+    effective_fps = extract_frames_at_fps(video_path, output_folder, target_fps=target_fps)
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     output_dir = os.path.join(script_dir, "output_frames", output_folder)
@@ -73,7 +78,7 @@ def main():
     calibrate_extracted_frames(
         output_dir=output_dir,
         start_frame_number=start_frame_number,
-        target_fps=target_fps
+        fps=effective_fps
     )
 
 

@@ -24,10 +24,7 @@ from tools.vis_utils import visualize_joints_together
 # Each entry should match a folder name inside joint_processing/output_frames/.
 # Example: if your frames are in output_frames/walking/, use "walking".
 VIDEO_NAMES = [
-    "sample_video_1",
-    "sample_video_2",
-    "sample_video_3",
-    "sample_video_4",
+    "yashanxiao", "ym", "s20260805_140850"
 ]
 
 GENERAL_OUTPUT_FOLDER = os.path.join(JOINT_PROCESSING_DIR, "outputs")

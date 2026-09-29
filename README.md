@@ -1,406 +1,221 @@
-# Gait Analysis with Smart Insole
+# Lower Limb Kinematics Estimation from Smart Insoles
 
-## Overview
+This repository contains the research code for an MSc dissertation investigating whether wearable smart-insole measurements can reconstruct continuous lower-limb motion without camera input during model inference. Bilateral plantar-pressure maps and foot-mounted inertial measurement units (IMUs) are used to estimate the 3D positions of eight landmarks. Monocular video processed with SAM 3D Body provides supervision during development.
 
-This project develops an end-to-end pipeline for gait analysis using a low-cost smart insole and a monocular camera. The goal is to enable accessible, in-the-wild biomechanical analysis without relying on laboratory motion capture systems.
+The dissertation compares a pressure-only CNN-LSTM, pressure-IMU concatenation, and feature-wise linear modulation (FiLM). This release provides one model-training entry point, [FiLM_cnn_lstm_imu.ipynb](FiLM_cnn_lstm_imu.ipynb), using three-participant leave-one-subject-out (LOSO) cross-validation. The historical `experiment/` notebooks are excluded from this upload. This is a research prototype with video-derived reference poses, rather than a validated replacement for optical motion capture.
 
-The system combines plantar pressure sensing with video-based 3D joint estimation and machine learning models to reconstruct and predict lower-limb motion.
+The released notebook uses seed 42 and includes MPJPE, constant-pose, motion-fidelity, per-fold IMU-zeroing and FiLM-modulation evaluation. Its execution counts and saved outputs are cleared. The results section presents FiLM seed-42 position errors and the IMU-zeroing MAE results.
 
----
+## Research question
 
-## Motivation
+Plantar pressure captures foot-ground loading but provides limited direct information about the motion of the knee and hip, particularly when the foot is unloaded during swing. The project investigates whether temporal learning and inertial conditioning can recover lower-limb trajectories from compact foot-worn sensing, and whether the learned mapping transfers to an unseen participant.
 
-Traditional gait analysis systems are:
-- expensive
-- not portable
-- limited to controlled environments
+The eight output landmarks, in order, are:
 
-This project explores a more scalable alternative using:
-- wearable pressure sensors
-- standard smartphone video
+1. Left hip
+2. Right hip
+3. Left knee
+4. Right knee
+5. Left heel
+6. Right heel
+7. Left big-toe tip
+8. Right big-toe tip
 
-Target applications include:
-- rehabilitation
-- sports performance analysis
-- mobility monitoring
+Targets are expressed in pelvis-relative, orientation-normalised coordinates. The task estimates relative lower-limb pose, not global walking translation. Angles derived from the landmarks are geometric proxies; the knee-heel-toe angle is not an anatomical ankle angle.
 
----
+## Method
 
-## Pipeline
+```text
+Bilateral pressure                  Bilateral six-axis IMU
+        |                                      |
+Pressure preprocessing              Pressure-derived stance detection
+        |                           19 features per foot, including ZUPT
+Frame-wise 2D CNN                              |
+256-dimensional embedding           64-dimensional embedding
+        |                                      |
+        +--------- FiLM or concatenation -------+
+                             |
+                   Two-layer LSTM, width 256
+                             |
+                   Scalar temporal attention
+                             |
+                   3D landmark regression
 
-The pipeline is composed of the following stages:
-
-### 1. Data Acquisition
-- Pressure data from a high-resolution insole (253 sensors)
-- Video recorded with a smartphone
-- Parallel recording of both modalities
-
-### 2. Preprocessing
-- Conversion of raw sensor data into 33×15 pressure maps
-- Handling of missing or faulty sensors
-- Temporal alignment between pressure data and video frames
-
-### 3. Crosstalk Correction
-- A U-Net model is used to correct spatial distortions in pressure measurements
-- Produces cleaner and more structured pressure maps
-
-### 4. 3D Joint Extraction
-- SAM 3D Body is used to extract 3D joint trajectories from monocular video
-- Provides supervision without requiring RGB-D systems
-
-### 5. Joint Prediction
-- A CNN-LSTM model predicts lower-limb joint coordinates from pressure data
-- Temporal modelling captures gait dynamics over sequences
-
----
-
-## Model Architecture
-
-- **U-Net**: spatial correction of pressure maps  
-- **CNN encoder**: feature extraction per frame  
-- **LSTM**: temporal modelling  
-- **Output**: 3D coordinates of lower-limb joints  
-
----
-
-## Installation
-
-This repository uses two separate Python environments:
-
-- `insole_collection/insole_environment.yml` for smart-insole capture, preprocessing, crosstalk correction, and visualisation.
-- `joint_collection/joint_environment.yml` for video frame processing and SAM 3D Body joint extraction.
-
-### Prerequisites
-
-Install the following before creating the environments:
-
-- Git
-- Anaconda or Miniconda
-- FFmpeg, available on your system `PATH`
-- A CUDA-capable GPU is recommended for SAM 3D Body inference. CPU execution may be very slow.
-
-Check FFmpeg is available:
-
-```bash
-ffmpeg -version
-ffprobe -version
+RGB video -> SAM 3D Body -> levelling / normalisation / synchronisation
+                                      |
+                              Supervision and evaluation
 ```
 
-### Clone the Repository
+### Pressure and video preprocessing
+
+- Each insole has a nominal 253-channel layout embedded in a `33 x 15` grid.
+- Pressure maps are bilinearly upsampled to `66 x 30` and smoothed with mask-normalised Gaussian filtering. Non-finite values are replaced before model input. Upsampling adds no physical sensor measurements.
+- Smartphone video is decimated from approximately 30 fps to approximately 15 fps. SAM 3D Body supplies 3D landmarks; session-level levelling estimates a common rotation from pressure-selected contact points and hip geometry.
+- Synchronisation uses joint timestamps as the reference and nearest wearable samples within 150 ms. For the three multimodal sessions, rows require both pressure and IMU matches.
+
+### Multimodal temporal model
+
+The pressure encoder shares CNN weights across frames and produces a 256-dimensional embedding. Each foot's raw six-axis IMU is expanded inside the multimodal notebooks to 19 features, including acceleration, scaled angular velocity, normalised acceleration direction, ZUPT-corrected velocity, within-step displacement and sine/cosine gait phase. Both feet are embedded into 64 dimensions.
+
+FiLM generates a per-frame scale and bias from the IMU embedding:
+
+```text
+fused = (1 + gamma) * pressure_embedding + beta
+```
+
+The concatenation control instead joins the pressure and IMU embeddings, giving a 320-dimensional LSTM input. Both multimodal models use a two-layer unidirectional LSTM with hidden width 256, dropout 0.3, and learned scalar temporal-attention pooling.
+
+The input window contains 30 frames. The multimodal regression head outputs the final **three poses within that window**, with only the last pose scored. The earlier two poses support trajectory losses. This is retrospective reconstruction, not future forecasting.
+
+The multimodal training objective is:
+
+```text
+L = L_kinematic + 0.5 L_contact + 0.3 L_bone + 0.1 L_smooth
+```
+
+The kinematic term is weighted L1, with landmark weights 0.5 for hips, 1 for knees and 2 for heels/toes, and frame weights `(0.5, 0.5, 1.0)`. Contact and smoothness penalties operate on normalised predictions; the bone term uses inverse-normalised coordinates and development-set median lengths.
+
+## Repository guide
+
+| Entry | Purpose |
+|---|---|
+| [FiLM CNN-LSTM notebook](FiLM_cnn_lstm_imu.ipynb) | Single model-training entry point; seed 42, cleared outputs, integrated position/motion metrics and per-fold IMU ablation |
+| [Preprocessing notebook](part2_preprocessing.ipynb) | Pressure resampling, landmark selection, normalisation and synchronisation |
+| [Crosstalk notebook](part1-CT.ipynb) | Legacy U-Net crosstalk model development |
+| `insole_collection/` | Sensor collection, conversion, levelling and synchronisation tools |
+| `joint_collection/joint_processing/` | Video frame calibration, SAM inference and joint-session merging |
+| `joint_collection/sam-3d-body/` | Third-party SAM 3D Body source and its own documentation/license |
+
+Use `FiLM_cnn_lstm_imu.ipynb` as the model-training entry point for this release. The local `experiment/` directory is excluded from the upload.
+
+## Environment setup
+
+Clone the repository:
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/YEYEPrincess/gait-analysis.git
 cd gait-analysis
 ```
 
-### Insole Environment
-
-Create and activate the environment used by the insole scripts:
+Two Conda environment exports are provided:
 
 ```bash
 conda env create -f insole_collection/insole_environment.yml
-conda activate ML
-```
-
-Quick import check:
-
-```bash
-python -c "import numpy, pandas, cv2, torch; print('insole environment ready')"
-```
-
-The live insole scripts bind to `0.0.0.0:8999` by default. To use a specific network adapter or port, set:
-
-PowerShell:
-
-```powershell
-$env:INSOLE_UDP_IP = "0.0.0.0"
-$env:INSOLE_UDP_PORT = "8999"
-```
-
-Windows Command Prompt:
-
-```bash
-set INSOLE_UDP_IP=0.0.0.0
-set INSOLE_UDP_PORT=8999
-```
-
-On macOS/Linux:
-
-```bash
-export INSOLE_UDP_IP=0.0.0.0
-export INSOLE_UDP_PORT=8999
-```
-
-Generated insole data is intentionally ignored by Git. Runtime CSV captures are written to:
-
-```text
-insole_collection/common/insole_frames_flat.csv
-```
-
-Processed datasets are written under:
-
-```text
-insole_collection/data_ct/
-insole_collection/data_for_3djoint/
-```
-
-### Joint Extraction Environment
-
-Create and activate the environment used by the video and SAM 3D Body scripts:
-
-```bash
 conda env create -f joint_collection/joint_environment.yml
-conda activate sam_3d_body
 ```
 
-Quick import check:
+- `ML`: insole processing and model development.
+- `sam_3d_body`: video processing and SAM 3D Body inference.
+
+Both exports contain Python 3.11 and platform-specific Windows dependencies. They record the development environments; installation on other platforms requires adaptation. A clean-environment installation was not tested during this documentation update. FFmpeg is used for video tools, and a CUDA-capable GPU is useful for SAM inference and training.
+
+For notebook use in the model environment, install/register a kernel if it is not already available:
 
 ```bash
-python -c "import cv2, numpy, torch; print('joint environment ready')"
+conda activate ML
+python -m pip install jupyterlab ipykernel
+python -m ipykernel install --user --name gait-analysis-ml --display-name "Gait analysis ML"
+python -m jupyterlab
 ```
 
-### SAM 3D Body Checkpoints
+The model notebooks require NumPy, SciPy, PyTorch and Matplotlib; some visualisation cells additionally require ImageIO and tqdm. Check these imports in the selected kernel before execution. See the third-party [SAM installation guide](joint_collection/sam-3d-body/INSTALL.md) for its additional dependencies and model access instructions.
 
-Model weights are not committed to the repository. Place the SAM 3D Body checkpoint files in:
+The video-supervision tools require the following external weights:
 
 ```text
 joint_collection/checkpoints/sam-3d-body-dinov3/model.ckpt
 joint_collection/checkpoints/sam-3d-body-dinov3/assets/mhr_model.pt
 ```
 
-The joint extraction code expects this layout when running:
+These weights are not supplied by this source-code update. The pretrained gait checkpoints also require a verified association with the model configuration, fold, data version and normalisation statistics before reuse.
 
-```bash
-python joint_collection/joint_processing/joint_extract.py
-```
+## Data
 
-### Expected Data Locations
+Raw participant recordings and processed training datasets are not included in the proposed source-code release. No public dataset download is provided here; execution requires the corresponding study data supplied separately by the project maintainer. Do not treat third-party example images as the gait study dataset.
 
-Input videos for joint extraction should be placed in:
+The study uses **5,756 synchronised frames from three participants**, evaluated with participant-level LOSO cross-validation.
 
-```text
-joint_collection/joint_processing/input_videos/
-```
+Each `<session>_synced.npz` contains at least:
 
-Extracted frames are generated in:
+| Key | Shape | Meaning |
+|---|---|---|
+| `insoles` | `(T, 2, 66, 30)` | Left/right pressure representations |
+| `imu` | `(T, 2, 6)` | Acceleration in g and angular velocity in degrees/s |
+| `joints` | `(T, 8, 3)` | Reference landmark coordinates in metres |
+| `timestamps` | `(T,)` | Shared reference timestamps in milliseconds |
+| `joint_names` | `(8,)` | Landmark names; stored as an object array in these files |
 
-```text
-joint_collection/joint_processing/output_frames/
-```
+The 19-dimensional IMU features are computed from the raw six-axis measurements in the multimodal training notebook.
 
-Joint outputs, overlays, and merged sessions are written under:
+### Starting from synchronised data
 
-```text
-joint_collection/joint_processing/outputs/
-```
+1. Place the three synchronised study sessions under `data/synced_levelled/`, the input directory configured in the notebook.
+2. Open [FiLM_cnn_lstm_imu.ipynb](FiLM_cnn_lstm_imu.ipynb) at the repository root and select the `Gait analysis ML` kernel.
+3. Ensure the **kernel working directory is the repository root** before running the setup cells. Alternatively, set `BASE` in your working copy to an absolute data path.
+4. Execute the setup, loading, preprocessing, model definitions, training helpers and LOSO loop in order. The notebook retains `SEED=42`, `USE_FILM=True` and `PRED_FRAMES=3` from the original seed-42 notebook.
+5. Run the aggregate MAE/MSE cell, then **10.1 Extended evaluation: position and motion diagnostics**. It computes overall, distal and per-landmark MPJPE, the development-participant constant-pose baseline, amplitude ratios and Pearson correlations.
+6. Run **10.2 Complete per-fold IMU ablation and FiLM diagnostics** with the matching checkpoints in `MODELS_DIR`. Each fold is evaluated with full and zero IMU input, using the same weights and target-normalisation statistics. Missing checkpoints are reported and skipped; all three are needed for a complete summary. No extra evaluation script is required.
+7. Loss curves and trajectory visualisations are optional. All execution counts and outputs remain cleared; no new study results are bundled.
 
-These generated folders are ignored by Git to keep the repository lightweight.
+Before training, set `MODELS_DIR` to the directory where checkpoints should be saved. Choose a separate directory for each run to preserve existing checkpoints.
 
-## Operating Guide
+### Starting from raw recordings
 
-The insole and joint-extraction parts use different Conda environments and should be run separately.
+This path requires session-specific calibration and local path configuration. The selected update starts from prepared paired pressure arrays for pressure processing; the CSV schema adapter does not construct those arrays. An older converter already tracked in the repository is not updated or validated by this release.
 
-- During the experiment, run only the insole collection script in the `ML` environment and record the video at the same time with the camera.
-- After the experiment, copy the recorded video into `joint_collection/joint_processing/input_videos/`.
-- Then switch to the `sam_3d_body` environment for frame extraction and 3D joint extraction.
+| Stage | Entry points | Output or prerequisite |
+|---|---|---|
+| Pressure input preparation | `adapt_csv_schema.py` (CSV schema only) | Prepare paired pressure NPZ separately; the local raw-pressure converter is excluded from this update |
+| IMU conversion | `offline_processing_imu.py` | Use its `--in` / `--out` arguments for explicit CSV and output paths |
+| Video preparation | `frame_calibration.py`, `extract_frames.py` | Select the start frame and keep the frame rate consistent |
+| Video supervision | `joint_extract.py`, `merge_npz.py` | SAM joint arrays; configure `VIDEO_NAMES` and required weights |
+| Session staging | `finalize_session.py` | Stage pressure/IMU under `data/`; choose any trimming consistently across modalities |
+| Base preprocessing | `part2_preprocessing.ipynb` | `data/insoles_preprocessed/`, selected joints and `data/synced/` |
+| Camera levelling | `level_ground_joints.py` | Levelled joint arrays; synchronisation is a separate preprocessing step |
 
-### 1. During the Experiment: Insole Capture
+The repository contains legacy UDP capture scripts. The paired pressure/IMU CSV workflow also references an external BALANCE collector; that collector/firmware is not included in this release. Hardware capture therefore requires the matching acquisition setup in addition to this repository.
 
-Activate the insole environment:
+## Experiment design and evaluation
 
-```bash
-conda activate ML
-```
+The following configuration describes the released FiLM notebook with seed 42.
 
-Choose one collection script depending on the data you need.
+- Three outer LOSO folds: one held-out participant per fold, with model weights reinitialised.
+- Development windows have length 30 and stride 1; a shuffled 15% is used for validation and checkpoint selection.
+- Adjacent windows overlap, so the internal validation set is not an independent participant-level generalisation test.
+- Normalisation statistics are computed from the two non-test participants, including their internal validation frames; the outer test participant is excluded.
+- Seed 42, batch size 32, Adam, weight decay `1e-5`, maximum 700 epochs and early-stopping patience 400.
+- CNN learning rate `2e-3`, LSTM `3e-3`, other parameter groups `1e-3`. The multimodal training helper clips gradient norm at 1.0.
+- MAE and MSE are calculated after inverse normalisation, in metres and square metres. MPJPE averages the 3D Euclidean landmark error, reported in millimetres.
+- MAE/MSE and per-landmark summaries use unweighted fold means and population standard deviations (`ddof=0`); these are not repeated-seed significance estimates.
 
-#### Crosstalk Suppression Training Data
+The integrated MPJPE cell runs after the LOSO loop and uses inverse-normalised `fold_results[...]["preds"]` and `fold_results[...]["trues"]`. It reports millimetres, gives each fold equal weight in the overall summary, and excludes both hips for distal MPJPE. Within-fold distribution statistics describe the window–landmark Euclidean errors; the per-landmark table summarises means and population standard deviations across folds.
 
-Use this when collecting data to train or evaluate the crosstalk suppression model:
+The extended evaluation also compares against the non-test participants' mean pose and reports per-coordinate amplitude ratios and Pearson correlations. The checkpoint-based IMU-zeroing evaluation reports changes in overall and distal MPJPE without retraining. FiLM statistics match the seed-123 implementation: the hook collects both full-input and zero-IMU passes, and the reported values are unweighted averages of batch summaries, rather than full-input-only statistics. This loader reconstruction uses the default `NORMALISE_IMU=False` configuration.
 
-```bash
-python insole_collection/data_coll_ct.py
-```
+## FiLM results (seed 42)
 
-This mode is for the setup where two insoles are superimposed:
+The following full-input results summarise FiLM with seed 42 under three-participant LOSO evaluation. MAE is reported in metres and MPJPE in millimetres after inverse normalisation, with equal weighting across the three held-out participants.
 
-- one stream is treated as the reference signal
-- the other stream is treated as the crosstalk-affected signal
-- the resulting raw CSV is later converted into paired `X` and `Y` arrays for crosstalk model training
+| Model | Seed | MAE (m) | MPJPE (mm) |
+|---|---:|---:|---:|
+| FiLM CNN-LSTM | 42 | 0.0532 | 117.9 |
 
-After collection, convert the captured CSV into an `.npz` dataset:
+### Test-time IMU-zeroing ablation
 
-```bash
-python insole_collection/offline_processing_ct.py
-```
+Table 5 of the dissertation reports the following MAE ablation results for the seed-42 FiLM model.
 
-Preview the processed crosstalk dataset with:
+| Model | Seed | Full-input MAE (m) | Zero-IMU MAE (m) | Increase |
+|---|---:|---:|---:|---:|
+| FiLM CNN-LSTM | 42 | 0.0532 | 0.0612 | 15.0% |
 
-```bash
-python insole_collection/visualise_ct.py
-```
+The IMU-zeroing experiment replaces the test-time IMU tensor with zeros while keeping the trained model weights fixed. The increase in MAE indicates sensitivity to removal of the inertial input. No retraining is performed; the change can reflect both loss of inertial information and the shift to an all-zero input distribution.
 
-#### Joint Prediction Training Data
+## Limitations
 
-Use one of these when collecting insole data that will later be aligned with 3D joint trajectories.
+The study uses three participants and video-estimated reference poses. Adjacent windows overlap, so window-level errors are temporally correlated. The fold statistics describe performance across the three held-out participants; larger cohorts and repeated training runs are needed to assess broader generalisation and robustness.
 
-```bash
-python insole_collection/data_coll_for_3djoint.py
-```
+The role of FiLM in individual gait phases remains a subject for further analysis. Phase-conditioned errors and inspection of the learned scale and bias parameters would help explain when inertial conditioning contributes to reconstruction accuracy. The current study does not establish clinical validity or end-to-end real-time deployment.
 
-This version is intended for live collection of processed insole maps for joint prediction. It displays raw left/right insole maps and no-crosstalk outputs. In the current configuration, `client == 0` is passed through the U-Net, while `client == 1` uses the bypass path unless `BOTH_CROSSTALK` is enabled in the script.
+## Acknowledgements
 
-```bash
-python insole_collection/data_coll_for_3djoint_ref_ct.py
-```
-
-This version is intended for a reference/crosstalk setup during joint-data collection:
-
-- `client == 0` is logged as the reference 33x15 map
-- `client == 1` is passed through the U-Net
-- the display compares reference, crosstalk-affected input, and model output
-
-After collection, convert the captured CSV into the joint-prediction insole dataset:
-
-```bash
-python insole_collection/offline_processing_for_3djoint.py
-```
-
-Preview the result with:
-
-```bash
-python insole_collection/visualise_for_3djoint.py
-```
-
-For synchronisation with the video-derived joint data, enable trimming in `visualise_for_3djoint.py`:
-
-```python
-ENABLE_TRIM_AFTER_PREVIEW = True
-```
-
-This lets you choose the first insole frame to keep after previewing the pressure maps. The saved cropped `.npz` has timestamps rebased from zero, which makes alignment with the calibrated video frames easier.
-
-If you have several crosstalk-training sessions, merge them with:
-
-```bash
-python insole_collection/merge_npz.py
-```
-
-Note: `insole_collection/merge_npz.py` expects datasets with both `X` and `Y` arrays, so it is suited to the crosstalk-training datasets produced by `offline_processing_ct.py`.
-
-#### Live Demonstration
-
-To demonstrate live crosstalk correction without running the full collection workflow:
-
-```bash
-python insole_collection/demo_ct.py
-```
-
-### 2. After the Experiment: Video Placement
-
-Copy the video recorded during the experiment into:
-
-```text
-joint_collection/joint_processing/input_videos/
-```
-
-Keep the filename matched to the `video_path` value used in `frame_calibration.py`. For example:
-
-```python
-video_path = "sample_video_1.mov"
-```
-
-The folder is present in the repository via `.gitkeep`, but video files inside it are ignored by Git.
-
-### 3. Joint Frame Extraction and Synchronisation
-
-Activate the joint environment:
-
-```bash
-conda activate sam_3d_body
-```
-
-Extract frames and choose the first frame for synchronisation:
-
-```bash
-python joint_collection/joint_processing/frame_calibration.py
-```
-
-This script:
-
-- reads the video from `joint_collection/joint_processing/input_videos/`
-- extracts frames at the configured FPS
-- asks for the first frame to keep
-- renumbers the kept frames from timestamp zero
-
-The extracted/calibrated frames are written to:
-
-```text
-joint_collection/joint_processing/output_frames/
-```
-
-### 4. 3D Joint Extraction
-
-Run SAM 3D Body on the calibrated frames:
-
-```bash
-python joint_collection/joint_processing/joint_extract.py
-```
-
-This writes per-frame joint `.npz` files under:
-
-```text
-joint_collection/joint_processing/outputs/joints_npz/
-```
-
-Finally, merge each session into a single joint `.npz`:
-
-```bash
-python joint_collection/joint_processing/merge_npz.py
-```
-
-Merged joint sessions are written under:
-
-```text
-joint_collection/joint_processing/outputs/sessions_final/
-```
-
-## Research Notebooks
-
-The root-level notebooks contain the bulk of the modelling and experimentation work:
-
-- `part1-CT.ipynb`: crosstalk suppression model development and training workflow.
-- `part2_preprocessing.ipynb`: preprocessing steps for preparing paired insole and 3D-joint datasets.
-- `part2-cnn_lstm_loso.ipynb`: CNN-LSTM joint prediction baseline, using leave-one-subject-out (LOSO) 3-fold cross-validation. Subjects 1 and 3 are excluded due to battery-induced timestamp drift causing insole–frame desynchronisation.
-
-### Transformer-based joint prediction
-
-These notebooks explore replacing the CNN-LSTM baseline with Transformer-based temporal modelling, evaluated with the same LOSO cross-validation protocol:
-
-- `part2-cnn_transformer_loso2.ipynb`: replaces the LSTM+Attention block with a CNN spatial encoder → sinusoidal positional encoding → Transformer encoder → mean pooling → FC head. Sequence length is increased from 30 to 60 frames (~2 s at 30 fps) to cover a full gait cycle, and the input adds two velocity-difference channels alongside the two raw pressure channels.
-- `part2_transformer_losov3.ipynb` (方案A / Plan A — dual output head): builds on the v2/v3 Transformer architecture but splits the output layer into two heads — a proximal head (hip, knee) and a distal head (heel, toe) — because heel/toe MAE was found to be 10–40x higher than hip/knee MAE. The distal head's loss is weighted 2x (`DISTAL_LOSS_WEIGHT`) relative to the proximal head.
-- `part2_transformer_planC.ipynb` (Plan C — spatially-preserving CNN): addresses a shared limitation of all prior versions, where `AdaptiveAvgPool2d(1)` collapses each frame's pressure map into a single vector and discards spatial layout. Plan C instead pools each frame down to a 6x3 spatial grid (18 tokens per frame) before the Transformer encoder, so spatial structure is preserved through the temporal modelling stage.
-
-These notebooks were originally developed in Google Colab. They are included as research records and working references, but they are not expected to run directly in this local repository without edits.
-
-Before running them locally, expect to update:
-
-- dataset paths
-- checkpoint paths
-- Google Drive or Colab-specific file access
-- runtime/device assumptions
-- any notebook-only installation cells
-
-The scripts in `insole_collection/` and `joint_collection/` are the cleaner local operating pipeline. The notebooks are best treated as the experimental training layer built on top of the generated `.npz` datasets.
-
-### Notes
-
-- If `conda env create` reports that an environment already exists, update it with:
-
-```bash
-conda env update -f insole_collection/insole_environment.yml --prune
-conda env update -f joint_collection/joint_environment.yml --prune
-```
-
-- If PyTorch or Detectron2 installation fails, reinstall the versions that match your CUDA, Python, and operating system setup.
-- Large files such as videos, extracted frames, `.npz` datasets, model checkpoints, and local Conda environments should remain untracked.
+This repository is a fork of [BioZ-HIVE/gait-analysis](https://github.com/BioZ-HIVE/gait-analysis), originating from [omargdr/gait-analysis](https://github.com/omargdr/gait-analysis). Video supervision uses SAM 3D Body; its source, attribution and license are retained under [joint_collection/sam-3d-body](joint_collection/sam-3d-body/README.md). FiLM follows feature-wise affine conditioning, and ZUPT follows zero-velocity-update principles. Third-party software and weights retain their respective terms.
